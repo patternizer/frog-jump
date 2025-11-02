@@ -1,0 +1,9 @@
+{
+  "levels": [
+    {"score": 0,    "frogs": 1, "speed": [3,6], "currents": 0.00, "wind": 0.01, "pad_scale": 0.90},
+    {"score": 1500, "frogs": 2, "speed": [3,7], "currents": 0.02, "wind": 0.02, "pad_scale": 0.88},
+    {"score": 3000, "frogs": 3, "speed": [4,8], "currents": 0.03, "wind": 0.03, "pad_scale": 0.86},
+    {"score": 5000, "frogs": 4, "speed": [5,9], "currents": 0.04, "wind": 0.04, "pad_scale": 0.84},
+    {"score": 7500, "frogs": 5, "speed": [6,10], "currents": 0.05, "wind": 0.05, "pad_scale": 0.82}
+  ]
+}
