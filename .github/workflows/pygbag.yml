@@ -17,7 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +25,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install system packages (ffmpeg)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -40,20 +38,20 @@ jobs:
         shell: bash
         run: |
           shopt -s globstar nullglob
-          count=0
           for f in assets/**/*.mp3; do
             ogg="${f%.mp3}.ogg"
             echo "Converting $f -> $ogg"
             ffmpeg -y -hide_banner -loglevel error -i "$f" -c:a libvorbis -q:a 5 "$ogg"
             rm -f "$f"
-            count=$((count+1))
           done
-          echo "Converted $count MP3 file(s)."
 
       - name: Build web bundle with pygbag
         env:
           PYGAME_HIDE_SUPPORT_PROMPT: "1"
         run: python -m pygbag .
+
+      - name: Add .nojekyll (so Pages serves underscores)
+        run: echo > build/web/.nojekyll
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
