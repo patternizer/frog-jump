@@ -2,18 +2,15 @@
 """
 Ellie's Frog Jump Game (flexible skins + rules)
 
-Expected folder structure (example):
-assets/skins/
-  autumn/
-    bg.png
-    levels.json
-    music.ogg / music.wav
-    lily pad.png          (or pad.png, platform.png, lilypad.png, etc.)
-    frog_bigeye.png       (or frog.png, ball.png)
-    frog_wave.png         (optional life icon)
-  spring/
-  winter/
-  night/
+Skins folder (example):
+assets/skins/<theme>/
+  bg.png
+  levels.json
+  music.ogg  (web ok)
+  music.wav  (recommended for iPhone/Safari; web prefers WAV)
+  lily pad.png (or pad.png, platform.png, lilypad.png, etc.)
+  frog_bigeye.png (or frog.png, ball.png)
+  frog_wave.png   (optional life icon)
 """
 
 import pygame, sys, os, json, random, time, math
@@ -23,7 +20,7 @@ from typing import List, Dict, Optional
 IS_WEB = (sys.platform == "emscripten")
 
 pygame.init()
-# On the web, we defer mixer init until the first user gesture.
+# Mixer: on web we init lazily after the first user gesture.
 try:
     if not IS_WEB:
         pygame.mixer.init()
@@ -40,10 +37,10 @@ SKINS_ROOT    = os.path.join("assets", "skins")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-LIFE_FILE  = "life.bmp"  # optional global life icon
+LIFE_FILE  = "life.bmp"  # optional global life icon (desktop)
 
 # ------- flexible asset discovery helpers ------- #
-# Prefer WAV on web (Safari/iOS), then OGG. Desktop allows broader set.
+# Prefer WAV on web (iPhone/Safari), then OGG. Desktop allows broader set.
 AUDIO_EXTS = (".wav", ".ogg") if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
 
@@ -287,12 +284,15 @@ class Bat(pygame.sprite.Sprite):
         self.image = new
         self.rect = self.image.get_rect(midbottom=self.rect.midbottom)
 
-    def update(self, pressed, wind_drift=0.0):
-        if pressed[pygame.K_RIGHT] or pressed[pygame.K_d]:
+    def update(self, pressed, wind_drift=0.0, move_left=False, move_right=False):
+        # keyboard
+        if pressed[pygame.K_RIGHT] or pressed[pygame.K_d] or move_right:
             self.rect.x += self.speed
-        if pressed[pygame.K_LEFT] or pressed[pygame.K_a]:
+        if pressed[pygame.K_LEFT] or pressed[pygame.K_a] or move_left:
             self.rect.x -= self.speed
+        # wind
         self.rect.x += wind_drift
+        # clamp
         self.rect.x = max(0, min(self.rect.x, SCREEN_W - self.rect.width))
 
 
@@ -380,6 +380,17 @@ class Game:
             except Exception:
                 self.life_img = pygame.Surface((24,24), pygame.SRCALPHA)
                 pygame.draw.circle(self.life_img, (0,180,0), (12,12), 10)
+
+        # --- mobile/touch controls state ---
+        self.left_held = False
+        self.right_held = False
+        self.drag_active = False
+
+        # on-screen buttons (drawn only on web/mobile)
+        self.btn_left  = pygame.Rect(10, SCREEN_H-90, 120, 80)
+        self.btn_right = pygame.Rect(SCREEN_W-130, SCREEN_H-90, 120, 80)
+        self.btn_mute  = pygame.Rect(SCREEN_W-84, 10, 32, 32)
+        self.btn_pause = pygame.Rect(SCREEN_W-42, 10, 32, 32)
 
         # audio locked on web until first tap/keypress
         self.audio_locked = IS_WEB
@@ -560,19 +571,49 @@ class Game:
     def handle_play(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
-            if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+            if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION):
                 self.unlock_audio_and_play()
+
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_p:
                     self.last_frame = self.screen.copy()
                     self.state = "PAUSED"
                 if e.key == pygame.K_m: self.toggle_mute()
 
+            if e.type == pygame.MOUSEBUTTONDOWN:
+                x, y = e.pos
+                # on-screen buttons
+                if IS_WEB and self.btn_left.collidepoint(x, y):
+                    self.left_held = True
+                elif IS_WEB and self.btn_right.collidepoint(x, y):
+                    self.right_held = True
+                elif IS_WEB and self.btn_mute.collidepoint(x, y):
+                    self.toggle_mute()
+                elif IS_WEB and self.btn_pause.collidepoint(x, y):
+                    self.last_frame = self.screen.copy()
+                    self.state = "PAUSED"
+                else:
+                    # drag-to-move: tap anywhere in bottom third to start dragging
+                    if y >= SCREEN_H * 0.65:
+                        self.drag_active = True
+                        self.bat.rect.centerx = x
+
+            if e.type == pygame.MOUSEMOTION:
+                if self.drag_active and e.buttons[0]:
+                    self.bat.rect.centerx = e.pos[0]
+
+            if e.type == pygame.MOUSEBUTTONUP:
+                self.left_held = False
+                self.right_held = False
+                self.drag_active = False
+
         pressed = pygame.key.get_pressed()
+        # wind drift is base + a soft sinusoidal gust
         t = pygame.time.get_ticks() / 1000.0
         wind_now = self.wind_base + self.wind_amp * math.sin(t * 1.2)
-        self.bat.update(pressed, wind_drift=wind_now)
+        self.bat.update(pressed, wind_drift=wind_now, move_left=self.left_held, move_right=self.right_held)
 
+        # level check based on current skin rules
         cur_skin = self.skinman.current()
         rules = self.rules_from_skin(cur_skin)
         new_level_idx, frogs, spd, currents, wind, pad_scale = self.level_for_score(rules, self.score)
@@ -607,6 +648,8 @@ class Game:
         self.balls.draw(self.screen)
         self.screen.blit(self.bat.image, self.bat.rect)
         self.draw_hud()
+        if IS_WEB:
+            self.draw_mobile_controls()
         pygame.display.flip()
         self.clock.tick(FPS)
 
@@ -616,12 +659,15 @@ class Game:
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_p: self.state = "PLAYING"
                 if e.key == pygame.K_m: self.toggle_mute()
+            if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
+                # tap pause overlay to resume
+                self.state = "PLAYING"
         if self.last_frame: self.screen.blit(self.last_frame, (0,0))
         overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         overlay.fill((0,0,0,120))
         self.screen.blit(overlay, (0,0))
         draw_text(self.screen, "Paused", 64, SCREEN_W//2, SCREEN_H//2 - 20, (240,240,240), center=True)
-        draw_text(self.screen, "Press P to resume", 28, SCREEN_W//2, SCREEN_H//2 + 30, (230,230,230), center=True)
+        draw_text(self.screen, "Tap anywhere to resume", 26, SCREEN_W//2, SCREEN_H//2 + 30, (230,230,230), center=True)
         pygame.display.flip()
         self.clock.tick(30)
 
@@ -641,6 +687,7 @@ class Game:
                     if len(self.name_input) < 12 and e.unicode.isprintable():
                         self.name_input += e.unicode
             if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
+                # mobile convenience: tap to accept current name (or "Anon")
                 add_score(self.name_input, self.score)
                 self.name_input = ""
                 self.state = "LEADER"
@@ -741,6 +788,36 @@ class Game:
         for i in range(self.lives):
             x = 180 + i * (self.life_img.get_width() + 8)
             self.screen.blit(self.life_img, (x, 6))
+
+    def draw_mobile_controls(self):
+        # translucent buttons
+        def pill(rect, color=(0,0,0,90), border=(255,255,255,140)):
+            surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(surf, color, pygame.Rect(0,0,*rect.size), border_radius=14)
+            pygame.draw.rect(surf, border, pygame.Rect(0,0,*rect.size), width=2, border_radius=14)
+            self.screen.blit(surf, rect.topleft)
+
+        pill(self.btn_left); pill(self.btn_right)
+        pill(self.btn_mute); pill(self.btn_pause)
+
+        # icons: left/right arrows
+        def arrow(center, dx):
+            x,y = center
+            pts = [(x+dx*12, y), (x-dx*8, y-10), (x-dx*8, y+10)]
+            pygame.draw.polygon(self.screen, (255,255,255), pts)
+        arrow(self.btn_left.center, dx=-1)
+        arrow(self.btn_right.center, dx=+1)
+
+        # mute icon
+        mx, my = self.btn_mute.center
+        pygame.draw.rect(self.screen, (255,255,255), (mx-6, my-6, 12, 12), 2)
+        if self.muted:
+            pygame.draw.line(self.screen, (255,80,80), (mx-10,my-10), (mx+10,my+10), 3)
+
+        # pause icon
+        px, py = self.btn_pause.center
+        pygame.draw.rect(self.screen, (255,255,255), (px-8, py-10, 5, 20))
+        pygame.draw.rect(self.screen, (255,255,255), (px+3,  py-10, 5, 20))
 
     def toggle_mute(self):
         self.muted = not self.muted
