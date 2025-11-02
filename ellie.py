@@ -56,8 +56,10 @@ GLOBAL_MUSIC_FALLBACK = "music.mp3"
 LIFE_FILE  = "life.bmp"
 
 # ------- flexible asset discovery helpers ------- #
-AUDIO_EXTS = (".mp3", ".ogg", ".wav", ".flac", ".m4a")
+IS_WEB = sys.platform == "emscripten"
+AUDIO_EXTS = (".ogg",) if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
+
 
 def list_files(folder):
     try:
@@ -228,8 +230,8 @@ class SkinManager:
                 ])
                 if not music:
                     # Backwards-compat
-                    for ext in (".mp3",".ogg",".wav"):
-                        candidate = os.path.join(base, "music"+ext)
+                    for ext in AUDIO_EXTS:
+						candidate = os.path.join(base, "music"+ext)
                         if os.path.exists(candidate):
                             music = candidate
                             break
