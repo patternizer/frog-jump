@@ -1,0 +1,5 @@
+{
+  "supabase_url": "https://YOURPROJECT.supabase.co",
+  "supabase_anon_key": "YOUR_PUBLIC_ANON_KEY",
+  "table": "scores"
+}
