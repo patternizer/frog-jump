@@ -1,8 +1,7 @@
 # main.py
 import asyncio, sys, os
 sys.path.append(os.path.dirname(__file__))
-
-from ellie import Game   # adjust if your Game class lives elsewhere
+from ellie import Game
 
 async def main():
     g = Game()
@@ -15,6 +14,6 @@ async def main():
         elif g.state == "SKINS":   g.handle_skins()
         else:
             break
-        await asyncio.sleep(0)   # required for browser
+        await asyncio.sleep(0)   # required for browsers
 if __name__ == "__main__":
     asyncio.run(main())
