@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
 """
-Ellie's Frog Jump Game — compact mobile controls + iPhone audio
+Ellie's Frog Jump Game — compact mobile controls + iPhone audio + UI-safe bottom
 
-• Touch UI:
-    - Small ◄/► buttons at bottom corners
-    - Tiny gear / mute / pause centered at bottom
-    - Toggle with T or tap the gear
-    - Auto-hides on desktop after any keypress
-• iPhone/iPad audio:
-    - On web builds, prefers music.wav (Safari) and unlocks after first tap/key
-• Optional global highscores via Supabase (Data/online.json)
-
-Skins folder (example):
-assets/skins/<theme>/
-  bg.png
-  levels.json
-  music.wav  (RECOMMENDED for iPhone/iPad web)
-  music.ogg  (fallback for other browsers)
-  pad.png / lilypad.png / platform.png / pad.bmp
-  frog_bigeye.png / frog.png / ball.png
-  frog_wave.png   (optional life icon)
+Changes in this version:
+- Adds a reserved bottom UI band (SAFE_UI_H) so on-screen buttons never overlap the lily pad.
+- Moves lily pad baseline to `play_bottom` (above the UI band).
+- Ball water detection uses `play_bottom`.
+- Compact bottom controls (small ◄/► in corners; tiny gear/mute/pause centered).
+- Touch UI toggles with T or tap the gear; auto-hides on desktop after keyboard use.
+- iPhone/iPad audio: prefers music.wav on web; starts after first tap/keypress.
+- Optional global highscores via Supabase (Data/online.json).
 """
 
 import pygame, sys, os, json, random, time, math
@@ -36,6 +26,10 @@ except Exception:
 
 SCREEN_W, SCREEN_H = 640, 480
 FPS = 60
+
+# --- UI band at the very bottom reserved for touch controls ---
+SAFE_UI_H = 60                 # height of the bottom control band
+PLAY_BOTTOM = SCREEN_H - SAFE_UI_H - 4  # gameplay floor (pad sits here)
 
 DATA_DIR = "Data"
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
@@ -195,7 +189,69 @@ def fetch_global_scores(limit=10):
     except Exception:
         return []
 
-# -------- skins -------- #
+# -------- sprites -------- #
+class Bat(pygame.sprite.Sprite):
+    def __init__(self, image, ground_y=PLAY_BOTTOM):
+        super().__init__()
+        self.base_image = image
+        self.image = image
+        self.ground_y = ground_y
+        self.rect = self.image.get_rect(midbottom=(SCREEN_W//2, self.ground_y))
+        self.speed = 12
+    def set_image(self, image):
+        self.base_image = image
+        self.image = image
+        self.rect = self.image.get_rect(midbottom=(self.rect.centerx, self.ground_y))
+    def set_scale(self, scale: float):
+        w,h = self.base_image.get_size()
+        new = pygame.transform.smoothscale(self.base_image, (max(20,int(w*scale)), max(8,int(h*scale))))
+        self.image = new
+        self.rect = self.image.get_rect(midbottom=(self.rect.centerx, self.ground_y))
+    def set_ground(self, gy: int):
+        self.ground_y = gy
+        self.rect.midbottom = (self.rect.centerx, gy)
+    def update(self, pressed, wind_drift=0.0, move_left=False, move_right=False):
+        if pressed[pygame.K_RIGHT] or pressed[pygame.K_d] or move_right:
+            self.rect.x += self.speed
+        if pressed[pygame.K_LEFT] or pressed[pygame.K_a] or move_left:
+            self.rect.x -= self.speed
+        self.rect.x += wind_drift
+        self.rect.x = max(0, min(self.rect.x, SCREEN_W - self.rect.width))
+
+class Ball(pygame.sprite.Sprite):
+    def __init__(self, image, speed_range):
+        super().__init__()
+        self.image = image
+        self.rect = self.image.get_rect()
+        self.speed_range = speed_range
+        self.vx = 0
+        self.vy = 0
+        self.reset()
+    def set_image(self, image):
+        self.image = image
+        self.rect = self.image.get_rect(center=self.rect.center)
+    def reset(self):
+        self.rect.centerx = random.randint(20, SCREEN_W - 20)
+        self.rect.y = 10
+        lo, hi = self.speed_range
+        self.vx = random.choice([-1,1]) * random.randint(lo, hi)
+        self.vy = random.randint(lo, hi)
+    def update(self, bat_rect, current_force_x=0.0):
+        self.vx += current_force_x
+        self.vx = max(-12, min(12, self.vx))
+        self.rect.x += self.vx
+        self.rect.y += self.vy
+        if self.rect.left <= 0 or self.rect.right >= SCREEN_W:
+            self.vx *= -1
+        if self.rect.top <= 0:
+            self.vy = abs(self.vy)
+        if self.rect.colliderect(bat_rect) and self.vy > 0:
+            lo, hi = self.speed_range
+            self.vy = -random.randint(max(lo,3), hi+1)
+    def fell_in_water(self, water_line_y: int):
+        return self.rect.bottom > water_line_y
+
+# -------- Skin management -------- #
 class SkinManager:
     def __init__(self, root=SKINS_ROOT, settings_file=SETTINGS_FILE):
         self.root = root
@@ -286,70 +342,12 @@ class SkinManager:
         s["auto_cycle"] = self.auto_cycle
         save_json(self.settings_file, s)
 
-# -------- sprites -------- #
-class Bat(pygame.sprite.Sprite):
-    def __init__(self, image):
-        super().__init__()
-        self.base_image = image
-        self.image = image
-        self.rect = self.image.get_rect(midbottom=(SCREEN_W//2, SCREEN_H-40))
-        self.speed = 12
-    def set_image(self, image):
-        self.base_image = image
-        self.image = image
-        self.rect = self.image.get_rect(midbottom=self.rect.midbottom)
-    def set_scale(self, scale: float):
-        w,h = self.base_image.get_size()
-        new = pygame.transform.smoothscale(self.base_image, (max(20,int(w*scale)), max(8,int(h*scale))))
-        self.image = new
-        self.rect = self.image.get_rect(midbottom=self.rect.midbottom)
-    def update(self, pressed, wind_drift=0.0, move_left=False, move_right=False):
-        if pressed[pygame.K_RIGHT] or pressed[pygame.K_d] or move_right:
-            self.rect.x += self.speed
-        if pressed[pygame.K_LEFT] or pressed[pygame.K_a] or move_left:
-            self.rect.x -= self.speed
-        self.rect.x += wind_drift
-        self.rect.x = max(0, min(self.rect.x, SCREEN_W - self.rect.width))
-
-class Ball(pygame.sprite.Sprite):
-    def __init__(self, image, speed_range):
-        super().__init__()
-        self.image = image
-        self.rect = self.image.get_rect()
-        self.speed_range = speed_range
-        self.vx = 0
-        self.vy = 0
-        self.reset()
-    def set_image(self, image):
-        self.image = image
-        self.rect = self.image.get_rect(center=self.rect.center)
-    def reset(self):
-        self.rect.centerx = random.randint(20, SCREEN_W - 20)
-        self.rect.y = 10
-        lo, hi = self.speed_range
-        self.vx = random.choice([-1,1]) * random.randint(lo, hi)
-        self.vy = random.randint(lo, hi)
-    def update(self, bat_rect, current_force_x=0.0):
-        self.vx += current_force_x
-        self.vx = max(-12, min(12, self.vx))
-        self.rect.x += self.vx
-        self.rect.y += self.vy
-        if self.rect.left <= 0 or self.rect.right >= SCREEN_W:
-            self.vx *= -1
-        if self.rect.top <= 0:
-            self.vy = abs(self.vy)
-        if self.rect.colliderect(bat_rect) and self.vy > 0:
-            lo, hi = self.speed_range
-            self.vy = -random.randint(max(lo,3), hi+1)
-    def fell_in_water(self):
-        return self.rect.bottom > SCREEN_H - 10
-
-# -------- control layout (compact) -------- #
-BTN_H = 56
-BTN_W = 96
-SMALL_BTN = 32
+# -------- compact control layout -------- #
+BTN_H = 44
+BTN_W = 72
+SMALL_BTN = 28
 MARGIN = 10
-SMALL_SPACING = 44  # distance between gear / mute / pause centers
+SMALL_SPACING = 38  # distance between gear / mute / pause centers
 
 class Game:
     def __init__(self):
@@ -379,7 +377,7 @@ class Game:
 
         cur = self.skinman.current()
         self.background = cur["bg"]
-        self.bat = Bat(cur["pad"])
+        self.bat = Bat(cur["pad"], ground_y=PLAY_BOTTOM)
         self.frog_img = cur["frog"]
 
         self.life_img = cur.get("life_icon")
@@ -402,13 +400,13 @@ class Game:
         self.keyboard_seen = False
         self.show_touch_ui: Optional[bool] = None
 
-        # compact bottom controls
+        # compact bottom controls (inside the reserved UI band)
         self.btn_left  = pygame.Rect(MARGIN, SCREEN_H - BTN_H - MARGIN, BTN_W, BTN_H)
         self.btn_right = pygame.Rect(SCREEN_W - BTN_W - MARGIN, SCREEN_H - BTN_H - MARGIN, BTN_W, BTN_H)
         cx = SCREEN_W // 2
         y_small = SCREEN_H - SMALL_BTN - MARGIN
         self.btn_gear  = pygame.Rect(cx - SMALL_SPACING - SMALL_BTN//2, y_small, SMALL_BTN, SMALL_BTN)
-        self.btn_mute  = pygame.Rect(cx - SMALL_BTN//2,             y_small, SMALL_BTN, SMALL_BTN)
+        self.btn_mute  = pygame.Rect(cx - SMALL_BTN//2,                 y_small, SMALL_BTN, SMALL_BTN)
         self.btn_pause = pygame.Rect(cx + SMALL_SPACING - SMALL_BTN//2, y_small, SMALL_BTN, SMALL_BTN)
 
         self.audio_locked = IS_WEB
@@ -537,7 +535,7 @@ class Game:
         else:
             self.audio_status = "nomusic"
 
-    # -------- run/state -------- #
+    # ----- state loop ----- #
     def run(self):
         while True:
             if self.state == "TITLE": self.handle_title()
@@ -567,6 +565,7 @@ class Game:
             self.apply_music_for_skin(cur)
         self.background = cur["bg"]
         self.bat.set_image(cur["pad"])
+        self.bat.set_ground(PLAY_BOTTOM)  # ensure pad sits above UI band
         self.frog_img = cur["frog"]
         self.life_img = cur.get("life_icon", self.life_img)
         rules = self.rules_from_skin(cur)
@@ -614,7 +613,6 @@ class Game:
         elif self.audio_status == "error": status = "Audio error (check WAV format)"
         if status:
             draw_text(self.screen, status, 20, SCREEN_W//2, SCREEN_H-36, (20,20,20), center=True)
-        # bottom controls (gear only visible if touch UI intended)
         self.draw_mobile_controls(compact_only=True)
 
     def handle_play(self):
@@ -646,7 +644,8 @@ class Game:
                     self.last_frame = self.screen.copy()
                     self.state = "PAUSED"
                 else:
-                    if y >= SCREEN_H * 0.65:
+                    # drag-to-move: only in a band just above the UI (avoid button hitboxes)
+                    if y >= PLAY_BOTTOM - 12:
                         self.drag_active = True
                         self.bat.rect.centerx = x
 
@@ -676,6 +675,7 @@ class Game:
                 self.apply_music_for_skin(cur_skin)
                 self.background = cur_skin["bg"]
                 self.bat.set_image(cur_skin["pad"])
+                self.bat.set_ground(PLAY_BOTTOM)
                 self.frog_img = cur_skin["frog"]
             self.apply_rules(spd, currents, wind, pad_scale)
 
@@ -686,7 +686,8 @@ class Game:
 
         for b in self.balls:
             b.update(self.bat.rect, current_force_x=self.current_force_x)
-        if any(b.fell_in_water() for b in self.balls):
+        # use playfield bottom as water line
+        if any(b.fell_in_water(PLAY_BOTTOM) for b in self.balls):
             self.lives -= 1
             for b in self.balls: b.reset()
             if self.lives <= 0:
@@ -823,6 +824,7 @@ class Game:
                     cur = self.skinman.current()
                     self.background = cur["bg"]
                     self.bat.set_image(cur["pad"])
+                    self.bat.set_ground(PLAY_BOTTOM)
                     self.frog_img = cur["frog"]
                     self.life_img = cur.get("life_icon", self.life_img)
                     if not self.audio_locked:
@@ -851,6 +853,7 @@ class Game:
                         cur = self.skinman.current()
                         self.background = cur["bg"]
                         self.bat.set_image(cur["pad"])
+                        self.bat.set_ground(PLAY_BOTTOM)
                         self.frog_img = cur["frog"]
                         self.life_img = cur.get("life_icon", self.life_img)
                         if not self.audio_locked:
@@ -882,28 +885,29 @@ class Game:
             self.screen.blit(self.life_img, (x, 6))
 
     def draw_mobile_controls(self, compact_only=False):
-        # Always draw the small bottom cluster gear/mute/pause so it’s discoverable,
-        # but only draw the big left/right if touch UI is on.
-        def pill(rect, alpha=90):
+        def pill(rect, alpha=70):
             surf = pygame.Surface(rect.size, pygame.SRCALPHA)
             pygame.draw.rect(surf, (0,0,0,alpha), pygame.Rect(0,0,*rect.size), border_radius=12)
             pygame.draw.rect(surf, (255,255,255,150), pygame.Rect(0,0,*rect.size), width=2, border_radius=12)
             self.screen.blit(surf, rect.topleft)
 
-        # small cluster
-        pill(self.btn_gear, alpha=70);  self._draw_gear_icon(self.btn_gear, active=(self.show_touch_ui or False))
-        pill(self.btn_mute, alpha=70);  self._draw_mute_icon(self.btn_mute, on=self.muted)
-        pill(self.btn_pause, alpha=70); self._draw_pause_icon(self.btn_pause)
+        # small cluster (always drawn so it’s discoverable)
+        pill(self.btn_gear, alpha=60);  self._draw_gear_icon(self.btn_gear, active=(self.show_touch_ui or False))
+        pill(self.btn_mute, alpha=60);  self._draw_mute_icon(self.btn_mute, on=self.muted)
+        pill(self.btn_pause, alpha=60); self._draw_pause_icon(self.btn_pause)
 
         # big arrows only when touch UI is enabled
         if compact_only: 
             return
         if not (self.show_touch_ui or False):
             return
-        pill(self.btn_left, alpha=70)
-        pill(self.btn_right, alpha=70)
+        pill(self.btn_left, alpha=60)
+        pill(self.btn_right, alpha=60)
         self._draw_arrow(self.btn_left.center, dx=-1)
         self._draw_arrow(self.btn_right.center, dx=+1)
+
+        # Optional: faint line to hint at the gameplay floor above UI band
+        # pygame.draw.line(self.screen, (255,255,255), (0, PLAY_BOTTOM), (SCREEN_W, PLAY_BOTTOM), 1)
 
     def _draw_arrow(self, center, dx):
         x,y = center
