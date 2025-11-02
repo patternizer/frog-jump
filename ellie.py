@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Ellie's Frog Jump Game (flexible skins + rules) — mobile-friendly edition
+Ellie's Frog Jump Game — compact mobile controls + iPhone audio
 
+• Touch UI:
+    - Small ◄/► buttons at bottom corners
+    - Tiny gear / mute / pause centered at bottom
+    - Toggle with T or tap the gear
+    - Auto-hides on desktop after any keypress
 • iPhone/iPad audio:
-    - On web builds, this prefers music.wav (Safari-friendly) then falls back to .ogg
-    - Audio starts after the very first tap/key (autoplay policy)
-• Touch controls:
-    - A bottom “control strip” with big ◄/► buttons + pause + mute
-    - Drag the pad by swiping in the bottom third of the screen
-    - Touch UI auto-hides on desktop after any keypress; toggle with the gear icon or 'T'
-• Global highscores (optional):
-    - If Data/online.json contains Supabase URL/key, the game will post/fetch top scores
-    - Local scores remain as fallback
+    - On web builds, prefers music.wav (Safari) and unlocks after first tap/key
+• Optional global highscores via Supabase (Data/online.json)
 
 Skins folder (example):
 assets/skins/<theme>/
@@ -19,19 +17,17 @@ assets/skins/<theme>/
   levels.json
   music.wav  (RECOMMENDED for iPhone/iPad web)
   music.ogg  (fallback for other browsers)
-  lily pad.png (or pad.png, platform.png, lilypad.png, etc.)
-  frog_bigeye.png (or frog.png, ball.png)
+  pad.png / lilypad.png / platform.png / pad.bmp
+  frog_bigeye.png / frog.png / ball.png
   frog_wave.png   (optional life icon)
 """
 
 import pygame, sys, os, json, random, time, math
 from typing import List, Dict, Optional
 
-# --- runtime flags ---
 IS_WEB = (sys.platform == "emscripten")
 
 pygame.init()
-# Mixer: on web we init lazily after the first user gesture.
 try:
     if not IS_WEB:
         pygame.mixer.init()
@@ -51,8 +47,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 LIFE_FILE  = "life.bmp"  # optional global life icon (desktop)
 
-# ------- flexible asset discovery helpers ------- #
-# Prefer WAV on web (iPhone/Safari), then OGG. Desktop allows broader set.
+# Prefer WAV on web (iPhone/Safari), then OGG. Desktop allows all.
 AUDIO_EXTS = (".wav", ".ogg") if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
 
@@ -66,15 +61,10 @@ def stem_lower(name: str):
     return os.path.splitext(name)[0].lower()
 
 def find_file_by_keywords(folder, keywords, allowed_exts):
-    """
-    Return the first file whose stem contains *all* keywords (case-insensitive).
-    Preference order is determined by `allowed_exts`, then alphabetical.
-    """
     if isinstance(keywords, str):
         kw = [keywords]
     else:
         kw = list(keywords)
-
     files = list_files(folder)
     matches = []
     for fname in files:
@@ -85,16 +75,13 @@ def find_file_by_keywords(folder, keywords, allowed_exts):
         stem_nospace = stem.replace(" ", "").replace("_", "")
         if all((k.lower() in stem) or (k.lower().replace(" ", "") in stem_nospace) for k in kw):
             matches.append(fname)
-
     if not matches:
         return None
-
     def ext_index(fn):
         for i, ext in enumerate(allowed_exts):
             if fn.lower().endswith(ext):
                 return i
         return len(allowed_exts)
-
     best = sorted(matches, key=lambda fn: (ext_index(fn), fn.lower()))[0]
     return os.path.join(folder, best)
 
@@ -167,7 +154,6 @@ def online_enabled():
     return bool(SUPABASE_URL and SUPABASE_KEY and SUPABASE_TABLE)
 
 def http_json(method, url, data=None, headers=None, timeout=8):
-    # Works on pygbag via Emscripten's fetch wrapper for urllib
     import urllib.request
     h = {"Content-Type": "application/json"}
     if headers: h.update(headers)
@@ -200,7 +186,6 @@ def post_global_score(name, score):
 def fetch_global_scores(limit=10):
     if not online_enabled(): return []
     try:
-        # order by score desc, tie-break ts asc
         url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=score.desc,ts.asc&limit={int(limit)}"
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
         res, code = http_json("GET", url, None, headers)
@@ -212,15 +197,6 @@ def fetch_global_scores(limit=10):
 
 # -------- skins -------- #
 class SkinManager:
-    """
-    Loads skins from assets/skins/<name>/ with:
-      - frog.(png|bmp|jpg)
-      - pad.(png|bmp|jpg)
-      - bg.(png|bmp|jpg)
-      - (optional) music.(wav|ogg|mp3 on desktop)
-      - (optional) levels.json
-    Remembers last chosen skin + auto-cycle setting in Data/settings.json
-    """
     def __init__(self, root=SKINS_ROOT, settings_file=SETTINGS_FILE):
         self.root = root
         self.settings_file = settings_file
@@ -270,7 +246,6 @@ class SkinManager:
 
             if frog and pad and bg:
                 bg = pygame.transform.smoothscale(bg, (SCREEN_W, SCREEN_H))
-
                 music = find_audio_any(base, [
                     ("music",),
                     ("bgm",),
@@ -282,7 +257,6 @@ class SkinManager:
                         if os.path.exists(candidate):
                             music = candidate
                             break
-
                 levels_path = os.path.join(base, "levels.json")
                 levels = safe_load_json(levels_path, None) if os.path.exists(levels_path) else None
                 self.skins.append({
@@ -299,20 +273,16 @@ class SkinManager:
 
     def current(self):
         return self.skins[self.index] if self.skins else None
-
     def next(self):
         if not self.skins: return
         self.index = (self.index + 1) % len(self.skins)
-
     def prev(self):
         if not self.skins: return
         self.index = (self.index - 1) % len(self.skins)
-
     def save_choice(self):
         s = safe_load_json(self.settings_file, {})
         cur = self.current()
-        if cur:
-            s["skin_name"] = cur["name"]
+        if cur: s["skin_name"] = cur["name"]
         s["auto_cycle"] = self.auto_cycle
         save_json(self.settings_file, s)
 
@@ -324,18 +294,15 @@ class Bat(pygame.sprite.Sprite):
         self.image = image
         self.rect = self.image.get_rect(midbottom=(SCREEN_W//2, SCREEN_H-40))
         self.speed = 12
-
     def set_image(self, image):
         self.base_image = image
         self.image = image
         self.rect = self.image.get_rect(midbottom=self.rect.midbottom)
-
     def set_scale(self, scale: float):
         w,h = self.base_image.get_size()
         new = pygame.transform.smoothscale(self.base_image, (max(20,int(w*scale)), max(8,int(h*scale))))
         self.image = new
         self.rect = self.image.get_rect(midbottom=self.rect.midbottom)
-
     def update(self, pressed, wind_drift=0.0, move_left=False, move_right=False):
         if pressed[pygame.K_RIGHT] or pressed[pygame.K_d] or move_right:
             self.rect.x += self.speed
@@ -353,18 +320,15 @@ class Ball(pygame.sprite.Sprite):
         self.vx = 0
         self.vy = 0
         self.reset()
-
     def set_image(self, image):
         self.image = image
         self.rect = self.image.get_rect(center=self.rect.center)
-
     def reset(self):
         self.rect.centerx = random.randint(20, SCREEN_W - 20)
         self.rect.y = 10
         lo, hi = self.speed_range
         self.vx = random.choice([-1,1]) * random.randint(lo, hi)
         self.vy = random.randint(lo, hi)
-
     def update(self, bat_rect, current_force_x=0.0):
         self.vx += current_force_x
         self.vx = max(-12, min(12, self.vx))
@@ -377,13 +341,15 @@ class Ball(pygame.sprite.Sprite):
         if self.rect.colliderect(bat_rect) and self.vy > 0:
             lo, hi = self.speed_range
             self.vy = -random.randint(max(lo,3), hi+1)
-
     def fell_in_water(self):
         return self.rect.bottom > SCREEN_H - 10
 
-# -------- game -------- #
-CONTROL_STRIP_H = 84     # height of the bottom strip for touch controls
-STRIP_Y = SCREEN_H - CONTROL_STRIP_H
+# -------- control layout (compact) -------- #
+BTN_H = 56
+BTN_W = 96
+SMALL_BTN = 32
+MARGIN = 10
+SMALL_SPACING = 44  # distance between gear / mute / pause centers
 
 class Game:
     def __init__(self):
@@ -401,7 +367,6 @@ class Game:
         self.name_input = ""
         self.muted = False
 
-        # world forces / visuals from rules
         self.current_force_x = 0.0
         self.wind_base = 0.0
         self.wind_amp  = 0.0
@@ -412,13 +377,11 @@ class Game:
         self.current_music_path = None
         self.audio_status = "locked"  # "locked" | "playing" | "nomusic" | "error"
 
-        # skin-dependent art
         cur = self.skinman.current()
         self.background = cur["bg"]
         self.bat = Bat(cur["pad"])
         self.frog_img = cur["frog"]
 
-        # life icon: per-skin, else LIFE_FILE, else generate
         self.life_img = cur.get("life_icon")
         if self.life_img is None:
             try:
@@ -432,32 +395,27 @@ class Game:
                 self.life_img = pygame.Surface((24,24), pygame.SRCALPHA)
                 pygame.draw.circle(self.life_img, (0,180,0), (12,12), 10)
 
-        # --- touch controls state + auto-hide logic ---
+        # touch state + auto-hide
         self.left_held = False
         self.right_held = False
         self.drag_active = False
         self.keyboard_seen = False
-        self.show_touch_ui: Optional[bool] = None  # None=undecided, True=show, False=hide
+        self.show_touch_ui: Optional[bool] = None
 
-        # on-screen buttons laid out inside bottom strip
-        strip_pad = 8
-        half = (SCREEN_W - strip_pad*3) // 2
-        self.btn_left  = pygame.Rect(strip_pad, STRIP_Y + strip_pad, half, CONTROL_STRIP_H - strip_pad*2)
-        self.btn_right = pygame.Rect(strip_pad*2 + half, STRIP_Y + strip_pad, half, CONTROL_STRIP_H - strip_pad*2)
+        # compact bottom controls
+        self.btn_left  = pygame.Rect(MARGIN, SCREEN_H - BTN_H - MARGIN, BTN_W, BTN_H)
+        self.btn_right = pygame.Rect(SCREEN_W - BTN_W - MARGIN, SCREEN_H - BTN_H - MARGIN, BTN_W, BTN_H)
+        cx = SCREEN_W // 2
+        y_small = SCREEN_H - SMALL_BTN - MARGIN
+        self.btn_gear  = pygame.Rect(cx - SMALL_SPACING - SMALL_BTN//2, y_small, SMALL_BTN, SMALL_BTN)
+        self.btn_mute  = pygame.Rect(cx - SMALL_BTN//2,             y_small, SMALL_BTN, SMALL_BTN)
+        self.btn_pause = pygame.Rect(cx + SMALL_SPACING - SMALL_BTN//2, y_small, SMALL_BTN, SMALL_BTN)
 
-        # small buttons sit centered at bottom strip top edge (don’t cover scores)
-        small_w = 36
-        self.btn_mute  = pygame.Rect(SCREEN_W//2 - small_w - 6, STRIP_Y - small_w - 6, small_w, small_w)
-        self.btn_pause = pygame.Rect(SCREEN_W//2 + 6,          STRIP_Y - small_w - 6, small_w, small_w)
-        self.btn_gear  = pygame.Rect(10, 10, 32, 32)  # toggle touch UI
-
-        # audio locked on web until first tap/keypress
         self.audio_locked = IS_WEB
         if not self.audio_locked:
             self.apply_music_for_skin(cur)
 
-        # online leaderboard cache
-        self.global_rows = None  # fetched list or None
+        self.global_rows = None
 
     def ensure_at_least_one_skin(self):
         if not self.skinman.skins:
@@ -473,7 +431,7 @@ class Game:
             {"score":0,    "frogs":1, "speed":[3,6],  "currents":0.0,  "wind":0.0,  "pad_scale":1.00},
             {"score":1500, "frogs":2, "speed":[3,7],  "currents":0.05, "wind":0.00, "pad_scale":0.95},
             {"score":3000, "frogs":3, "speed":[4,8],  "currents":0.08, "wind":0.03, "pad_scale":0.92},
-            {"score":5000, "froogs":4, "speed":[5,9],  "currents":0.12, "wind":0.04, "pad_scale":0.88},
+            {"score":5000, "frogs":4, "speed":[5,9],  "currents":0.12, "wind":0.04, "pad_scale":0.88},
             {"score":7500, "frogs":5, "speed":[6,10], "currents":0.15, "wind":0.05, "pad_scale":0.84},
         ]
         raw = skin.get("levels")
@@ -548,7 +506,6 @@ class Game:
             b.speed_range = speed_range
 
     def apply_music_for_skin(self, skin):
-        # Only blocked while audio_locked; runs on web & desktop after first gesture.
         if getattr(self, "audio_locked", False):
             self.audio_status = "locked"
             return
@@ -559,19 +516,15 @@ class Game:
         except Exception:
             self.audio_status = "error"
             return
-
         try:
             pygame.mixer.music.stop()
         except Exception:
             pass
-
         target = skin.get("music")
-        # On web, prefer a sibling WAV if we only found OGG (Safari).
         if IS_WEB and target and target.lower().endswith(".ogg"):
             wav_candidate = os.path.splitext(target)[0] + ".wav"
             if os.path.exists(wav_candidate):
                 target = wav_candidate
-
         if target and os.path.exists(target):
             try:
                 pygame.mixer.music.load(target)
@@ -583,6 +536,27 @@ class Game:
                 self.audio_status = "error"
         else:
             self.audio_status = "nomusic"
+
+    # -------- run/state -------- #
+    def run(self):
+        while True:
+            if self.state == "TITLE": self.handle_title()
+            elif self.state == "PLAYING": self.handle_play()
+            elif self.state == "PAUSED": self.handle_pause()
+            elif self.state == "NAME": self.handle_name()
+            elif self.state == "LEADER": self.handle_leader()
+            elif self.state == "SKINS": self.handle_skins()
+            else: break
+        pygame.quit(); sys.exit()
+
+    def _note_keyboard(self):
+        self.keyboard_seen = True
+        if self.show_touch_ui is None or self.show_touch_ui:
+            self.show_touch_ui = False
+
+    def _note_mouse(self):
+        if self.show_touch_ui is None:
+            self.show_touch_ui = True
 
     def start_game(self):
         self.score = 0
@@ -602,47 +576,22 @@ class Game:
             self.balls.add(Ball(self.frog_img, spd))
         self.state = "PLAYING"
 
-    # ----- state loop ----- #
-    def run(self):
-        while True:
-            if self.state == "TITLE": self.handle_title()
-            elif self.state == "PLAYING": self.handle_play()
-            elif self.state == "PAUSED": self.handle_pause()
-            elif self.state == "NAME": self.handle_name()
-            elif self.state == "LEADER": self.handle_leader()
-            elif self.state == "SKINS": self.handle_skins()
-            else: break
-        pygame.quit(); sys.exit()
-
-    def _note_keyboard(self):
-        self.keyboard_seen = True
-        if self.show_touch_ui is None or self.show_touch_ui:
-            self.show_touch_ui = False  # hide touch UI after any keyboard use
-
-    def _note_mouse(self):
-        if self.show_touch_ui is None:
-            self.show_touch_ui = True   # show touch UI on first tap (likely mobile)
-
     def handle_title(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
-
             if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 self.unlock_audio_and_play()
-
             if e.type == pygame.KEYDOWN:
                 self._note_keyboard()
                 if e.key == pygame.K_SPACE: self.start_game()
                 if e.key == pygame.K_s: self.state = "SKINS"
                 if e.key == pygame.K_m: self.toggle_mute()
-                if e.key == pygame.K_t:  # manual toggle
-                    self.show_touch_ui = not (self.show_touch_ui or False)
+                if e.key == pygame.K_t: self.show_touch_ui = not (self.show_touch_ui or False)
             if e.type == pygame.MOUSEBUTTONDOWN:
                 self._note_mouse()
                 if self.btn_gear.collidepoint(e.pos):
                     self.show_touch_ui = not (self.show_touch_ui or False)
                 else:
-                    # tap-to-start for mobile
                     self.start_game()
 
         self.draw_title()
@@ -659,16 +608,14 @@ class Game:
         preview = pygame.transform.smoothscale(self.skinman.current()["frog"], (64,64))
         self.screen.blit(preview, (SCREEN_W//2-32, 310))
         draw_text(self.screen, f"Skin: {self.skinman.current()['name']}", 26, SCREEN_W//2, 390, center=True)
-        # audio hint/status
         status = None
         if self.audio_locked: status = "Tap/press any key to enable sound"
         elif self.audio_status == "nomusic": status = "No music file (add music.wav)"
         elif self.audio_status == "error": status = "Audio error (check WAV format)"
         if status:
             draw_text(self.screen, status, 20, SCREEN_W//2, SCREEN_H-36, (20,20,20), center=True)
-
-        # gear icon for toggling touch UI
-        self._draw_gear(self.btn_gear, active=(self.show_touch_ui or False))
+        # bottom controls (gear only visible if touch UI intended)
+        self.draw_mobile_controls(compact_only=True)
 
     def handle_play(self):
         for e in pygame.event.get():
@@ -682,8 +629,7 @@ class Game:
                     self.last_frame = self.screen.copy()
                     self.state = "PAUSED"
                 if e.key == pygame.K_m: self.toggle_mute()
-                if e.key == pygame.K_t:  # manual toggle touch UI
-                    self.show_touch_ui = not (self.show_touch_ui or False)
+                if e.key == pygame.K_t: self.show_touch_ui = not (self.show_touch_ui or False)
 
             if e.type == pygame.MOUSEBUTTONDOWN:
                 self._note_mouse()
@@ -700,7 +646,6 @@ class Game:
                     self.last_frame = self.screen.copy()
                     self.state = "PAUSED"
                 else:
-                    # drag-to-move: tap anywhere in bottom third to start dragging
                     if y >= SCREEN_H * 0.65:
                         self.drag_active = True
                         self.bat.rect.centerx = x
@@ -728,7 +673,7 @@ class Game:
                 self.skinman.next()
                 self.skinman.save_choice()
                 cur_skin = self.skinman.current()
-                self.apply_music_for_skin(cur_skin)  # harmless if audio still locked
+                self.apply_music_for_skin(cur_skin)
                 self.background = cur_skin["bg"]
                 self.bat.set_image(cur_skin["pad"])
                 self.frog_img = cur_skin["frog"]
@@ -753,10 +698,7 @@ class Game:
         self.balls.draw(self.screen)
         self.screen.blit(self.bat.image, self.bat.rect)
         self.draw_hud()
-        if (self.show_touch_ui or False):
-            self.draw_control_strip()
-        # gear is always visible for toggling
-        self._draw_gear(self.btn_gear, active=(self.show_touch_ui or False))
+        self.draw_mobile_controls()
         pygame.display.flip()
         self.clock.tick(FPS)
 
@@ -767,8 +709,7 @@ class Game:
                 self._note_keyboard()
                 if e.key == pygame.K_p: self.state = "PLAYING"
                 if e.key == pygame.K_m: self.toggle_mute()
-                if e.key == pygame.K_t:
-                    self.show_touch_ui = not (self.show_touch_ui or False)
+                if e.key == pygame.K_t: self.show_touch_ui = not (self.show_touch_ui or False)
             if e.type == pygame.MOUSEBUTTONDOWN:
                 self._note_mouse()
                 if self.btn_gear.collidepoint(e.pos):
@@ -782,7 +723,7 @@ class Game:
         self.screen.blit(overlay, (0,0))
         draw_text(self.screen, "Paused", 64, SCREEN_W//2, SCREEN_H//2 - 20, (240,240,240), center=True)
         draw_text(self.screen, "Tap anywhere to resume (P to resume)", 26, SCREEN_W//2, SCREEN_H//2 + 30, (230,230,230), center=True)
-        self._draw_gear(self.btn_gear, active=(self.show_touch_ui or False))
+        self.draw_mobile_controls()
         pygame.display.flip()
         self.clock.tick(30)
 
@@ -821,7 +762,6 @@ class Game:
         self.clock.tick(30)
 
     def handle_leader(self):
-        # fetch global rows once on entry
         if self.global_rows is None and online_enabled():
             try:
                 self.global_rows = fetch_global_scores(10)
@@ -836,8 +776,7 @@ class Game:
                 if e.key == pygame.K_ESCAPE: return self.quit()
                 if e.key == pygame.K_s: self.state = "SKINS"
                 if e.key == pygame.K_m: self.toggle_mute()
-                if e.key == pygame.K_t:
-                    self.show_touch_ui = not (self.show_touch_ui or False)
+                if e.key == pygame.K_t: self.show_touch_ui = not (self.show_touch_ui or False)
             if e.type == pygame.MOUSEBUTTONDOWN:
                 self._note_mouse()
                 if self.btn_gear.collidepoint(e.pos):
@@ -847,16 +786,12 @@ class Game:
 
         self.screen.blit(self.background, (0,0))
         draw_text(self.screen, "Top Scores", 56, SCREEN_W//2, 70, center=True)
-
-        # Local scores
         draw_text(self.screen, "Local", 28, SCREEN_W//2 - 140, 120, center=True)
         rows = safe_load_json(SCORES_FILE, [])
         y = 150
         for i, row in enumerate(rows[:10], start=1):
             draw_text(self.screen, f"{i:>2}. {row['name']:<12}  {row['score']}", 24, SCREEN_W//2 - 140, y, center=True)
             y += 26
-
-        # Global (if configured)
         draw_text(self.screen, "Global", 28, SCREEN_W//2 + 140, 120, center=True)
         y2 = 150
         if online_enabled():
@@ -870,9 +805,7 @@ class Game:
             draw_text(self.screen, "— not configured —", 22, SCREEN_W//2 + 140, y2, center=True)
 
         draw_text(self.screen, "SPACE: Play  S: Skins  Esc: Quit", 22, SCREEN_W//2, SCREEN_H-60, center=True)
-        self._draw_gear(self.btn_gear, active=(self.show_touch_ui or False))
-        if (self.show_touch_ui or False):
-            self.draw_control_strip()
+        self.draw_mobile_controls()
         pygame.display.flip()
         self.clock.tick(30)
 
@@ -881,7 +814,6 @@ class Game:
             if e.type == pygame.QUIT: return self.quit()
             if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 self.unlock_audio_and_play()
-
             if e.type == pygame.KEYDOWN:
                 self._note_keyboard()
                 if e.key in (pygame.K_LEFT, pygame.K_a): self.skinman.prev()
@@ -903,7 +835,6 @@ class Game:
                     self.state = "TITLE"
                 if e.key == pygame.K_t:
                     self.show_touch_ui = not (self.show_touch_ui or False)
-
             if e.type == pygame.MOUSEBUTTONDOWN:
                 self._note_mouse()
                 if self.btn_gear.collidepoint(e.pos):
@@ -938,12 +869,11 @@ class Game:
         draw_text(self.screen, f"←/→ browse, Enter select, C toggle auto-cycle ({'ON' if self.skinman.auto_cycle else 'OFF'})", 22, SCREEN_W//2, 360, center=True)
         draw_text(self.screen, f"Music: {music_label}", 22, SCREEN_W//2, 388, center=True)
         draw_text(self.screen, "Esc to return", 22, SCREEN_W//2, 414, center=True)
-        self._draw_gear(self.btn_gear, active=(self.show_touch_ui or False))
-        if (self.show_touch_ui or False):
-            self.draw_control_strip()
+        self.draw_mobile_controls()
         pygame.display.flip()
         self.clock.tick(30)
 
+    # -------- HUD & controls drawing -------- #
     def draw_hud(self):
         draw_text(self.screen, f"Score: {self.score}", 28, 10, 10)
         draw_text(self.screen, f"Best:  {best_score()}", 28, SCREEN_W-180, 10)
@@ -951,62 +881,58 @@ class Game:
             x = 180 + i * (self.life_img.get_width() + 8)
             self.screen.blit(self.life_img, (x, 6))
 
-    def draw_control_strip(self):
-        # bottom translucent strip
-        strip = pygame.Surface((SCREEN_W, CONTROL_STRIP_H), pygame.SRCALPHA)
-        strip.fill((0,0,0,90))
-        self.screen.blit(strip, (0, STRIP_Y))
-
-        # button pills
-        def pill(rect, color=(255,255,255,40), border=(255,255,255,140)):
+    def draw_mobile_controls(self, compact_only=False):
+        # Always draw the small bottom cluster gear/mute/pause so it’s discoverable,
+        # but only draw the big left/right if touch UI is on.
+        def pill(rect, alpha=90):
             surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-            pygame.draw.rect(surf, color, pygame.Rect(0,0,*rect.size), border_radius=14)
-            pygame.draw.rect(surf, border, pygame.Rect(0,0,*rect.size), width=2, border_radius=14)
+            pygame.draw.rect(surf, (0,0,0,alpha), pygame.Rect(0,0,*rect.size), border_radius=12)
+            pygame.draw.rect(surf, (255,255,255,150), pygame.Rect(0,0,*rect.size), width=2, border_radius=12)
             self.screen.blit(surf, rect.topleft)
 
-        pill(self.btn_left); pill(self.btn_right)
+        # small cluster
+        pill(self.btn_gear, alpha=70);  self._draw_gear_icon(self.btn_gear, active=(self.show_touch_ui or False))
+        pill(self.btn_mute, alpha=70);  self._draw_mute_icon(self.btn_mute, on=self.muted)
+        pill(self.btn_pause, alpha=70); self._draw_pause_icon(self.btn_pause)
 
-        # arrow icons
-        def arrow(center, dx):
-            x,y = center
-            pts = [(x+dx*16, y), (x-dx*10, y-12), (x-dx*10, y+12)]
-            pygame.draw.polygon(self.screen, (255,255,255), pts)
-        arrow(self.btn_left.center, dx=-1)
-        arrow(self.btn_right.center, dx=+1)
+        # big arrows only when touch UI is enabled
+        if compact_only: 
+            return
+        if not (self.show_touch_ui or False):
+            return
+        pill(self.btn_left, alpha=70)
+        pill(self.btn_right, alpha=70)
+        self._draw_arrow(self.btn_left.center, dx=-1)
+        self._draw_arrow(self.btn_right.center, dx=+1)
 
-        # small buttons above the strip (don’t cover score)
-        self._draw_square_button(self.btn_mute, "mute", on=self.muted)
-        self._draw_square_button(self.btn_pause, "pause", on=False)
+    def _draw_arrow(self, center, dx):
+        x,y = center
+        pts = [(x+dx*16, y), (x-dx*10, y-12), (x-dx*10, y+12)]
+        pygame.draw.polygon(self.screen, (255,255,255), pts)
 
-    def _draw_square_button(self, rect, kind, on=False):
-        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(surf, (0,0,0,90), pygame.Rect(0,0,*rect.size), border_radius=6)
-        pygame.draw.rect(surf, (255,255,255,160), pygame.Rect(0,0,*rect.size), width=2, border_radius=6)
-        cx, cy = rect.width//2, rect.height//2
-        if kind == "pause":
-            pygame.draw.rect(surf, (255,255,255), (cx-7, cy-10, 5, 20))
-            pygame.draw.rect(surf, (255,255,255), (cx+2, cy-10, 5, 20))
-        elif kind == "mute":
-            pygame.draw.rect(surf, (255,255,255), (cx-7, cy-7, 14, 14), 2)
-            if on:
-                pygame.draw.line(surf, (255,80,80), (cx-10,cy-10), (cx+10,cy+10), 3)
-        self.screen.blit(surf, rect.topleft)
+    def _draw_pause_icon(self, rect):
+        cx, cy = rect.center
+        pygame.draw.rect(self.screen, (255,255,255), (cx-7, cy-10, 5, 20))
+        pygame.draw.rect(self.screen, (255,255,255), (cx+2, cy-10, 5, 20))
 
-    def _draw_gear(self, rect, active=False):
-        surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(surf, (0,0,0,90), pygame.Rect(0,0,*rect.size), border_radius=6)
-        pygame.draw.rect(surf, (255,255,255,160), pygame.Rect(0,0,*rect.size), width=2, border_radius=6)
-        cx, cy = rect.width//2, rect.height//2
+    def _draw_mute_icon(self, rect, on=False):
+        cx, cy = rect.center
+        pygame.draw.rect(self.screen, (255,255,255), (cx-7, cy-7, 14, 14), 2)
+        if on:
+            pygame.draw.line(self.screen, (255,80,80), (cx-10,cy-10), (cx+10,cy+10), 3)
+
+    def _draw_gear_icon(self, rect, active=False):
+        cx, cy = rect.center
         for i in range(8):
             ang = i*(math.pi/4)
             x = cx + int(10*math.cos(ang))
             y = cy + int(10*math.sin(ang))
-            pygame.draw.circle(surf, (255,255,255), (x,y), 2)
-        pygame.draw.circle(surf, (255,255,255), (cx,cy), 5, 2)
+            pygame.draw.circle(self.screen, (255,255,255), (x,y), 2)
+        pygame.draw.circle(self.screen, (255,255,255), (cx,cy), 5, 2)
         if active:
-            pygame.draw.circle(surf, (80,220,80), (rect.width-6, 6), 4)
-        self.screen.blit(surf, rect.topleft)
+            pygame.draw.circle(self.screen, (80,220,80), (rect.right-6, rect.top+6), 4)
 
+    # -------- misc -------- #
     def toggle_mute(self):
         self.muted = not self.muted
         try:
@@ -1018,7 +944,6 @@ class Game:
         pygame.quit(); sys.exit()
 
     def unlock_audio_and_play(self):
-        """Enable audio after a user gesture and start the current skin’s music."""
         if not getattr(self, "audio_locked", False):
             return
         self.audio_locked = False
@@ -1026,3 +951,4 @@ class Game:
 
 if __name__ == "__main__":
     Game().run()
+
