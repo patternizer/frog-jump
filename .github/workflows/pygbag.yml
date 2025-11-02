@@ -31,13 +31,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install pygbag
 
-      - name: Build web bundle with pygbag
-        env:
-          PYGAME_HIDE_SUPPORT_PROMPT: "1"
-        run: python -m pygbag .
-
-      - name: Add .nojekyll
-        run: echo > build/web/.nojekyll
+      # Headless build: let pygbag finish packing, then stop the server
+      - name: Build web bundle with pygbag (CI-friendly)
+        shell: bash
+        run: |
+          set -e
+          # start pygbag, allow up to 120s; it will build then launch a dev server
+          timeout 120s python -m pygbag . || true
+          # ensure bundle exists
+          if [ ! -f build/web/index.html ]; then
+            echo "ERROR: build/web/index.html not found; pygbag did not produce a bundle." >&2
+            exit 1
+          fi
+          # make Pages serve files with leading underscores, etc.
+          : > build/web/.nojekyll
+          echo "Bundle ready at build/web"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
