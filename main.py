@@ -1,0 +1,20 @@
+# main.py  (keeps ellie.py unchanged for desktop)
+import asyncio
+from ellie import Game
+
+async def main():
+    g = Game()
+    while True:
+        if g.state == "TITLE":   g.handle_title()
+        elif g.state == "PLAYING": g.handle_play()
+        elif g.state == "PAUSED":  g.handle_pause()
+        elif g.state == "NAME":    g.handle_name()
+        elif g.state == "LEADER":  g.handle_leader()
+        elif g.state == "SKINS":   g.handle_skins()
+        else:
+            break
+        # required for the browser event loop
+        await asyncio.sleep(0)
+
+if __name__ == "__main__":
+    asyncio.run(main())
