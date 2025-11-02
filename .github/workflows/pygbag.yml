@@ -31,14 +31,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install pygbag
 
-      # Remove MP3s so pygbag won't choke; keep/commit OGG files for music.
-      - name: Strip MP3s for web build
-        run: |
-          if [ -d assets ]; then
-            echo "Removing MP3s under assets/ for web build:"
-            find assets -type f -iname '*.mp3' -print -delete || true
-          fi
-
       - name: Build web bundle with pygbag
         env:
           PYGAME_HIDE_SUPPORT_PROMPT: "1"
@@ -65,3 +57,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
