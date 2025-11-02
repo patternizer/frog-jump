@@ -7,10 +7,10 @@ assets/skins/
   autumn/
     bg.png
     levels.json
-    music.ogg            (or music.wav for older iOS)
-    lily pad.png         (or pad.png, platform.png, lilypad.png, etc.)
-    frog_bigeye.png      (or frog.png, ball.png)
-    frog_wave.png        (optional life icon)
+    music.ogg / music.wav
+    lily pad.png          (or pad.png, platform.png, lilypad.png, etc.)
+    frog_bigeye.png       (or frog.png, ball.png)
+    frog_wave.png         (optional life icon)
   spring/
   winter/
   night/
@@ -23,7 +23,7 @@ from typing import List, Dict, Optional
 IS_WEB = (sys.platform == "emscripten")
 
 pygame.init()
-# On the web, let the first user gesture unlock & init sound.
+# On the web, we defer mixer init until the first user gesture.
 try:
     if not IS_WEB:
         pygame.mixer.init()
@@ -43,9 +43,10 @@ os.makedirs(DATA_DIR, exist_ok=True)
 LIFE_FILE  = "life.bmp"  # optional global life icon
 
 # ------- flexible asset discovery helpers ------- #
-# Prefer OGG on web but allow WAV fallback (iPhone Safari).
-AUDIO_EXTS = (".ogg", ".wav") if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
+# Prefer WAV on web (Safari/iOS), then OGG. Desktop allows broader set.
+AUDIO_EXTS = (".wav", ".ogg") if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
+
 
 def list_files(folder):
     try:
@@ -53,27 +54,44 @@ def list_files(folder):
     except Exception:
         return []
 
+
 def stem_lower(name: str):
     return os.path.splitext(name)[0].lower()
+
 
 def find_file_by_keywords(folder, keywords, allowed_exts):
     """
     Return the first file whose stem contains *all* keywords (case-insensitive).
+    Preference order is determined by `allowed_exts`, then alphabetical.
     """
     if isinstance(keywords, str):
         kw = [keywords]
     else:
         kw = list(keywords)
+
     files = list_files(folder)
-    for fname in sorted(files):
+    matches = []
+    for fname in files:
         low = fname.lower()
         if not low.endswith(allowed_exts):
             continue
         stem = stem_lower(fname)
         stem_nospace = stem.replace(" ", "").replace("_", "")
         if all((k.lower() in stem) or (k.lower().replace(" ", "") in stem_nospace) for k in kw):
-            return os.path.join(folder, fname)
-    return None
+            matches.append(fname)
+
+    if not matches:
+        return None
+
+    def ext_index(fn):
+        for i, ext in enumerate(allowed_exts):
+            if fn.lower().endswith(ext):
+                return i
+        return len(allowed_exts)
+
+    best = sorted(matches, key=lambda fn: (ext_index(fn), fn.lower()))[0]
+    return os.path.join(folder, best)
+
 
 def find_image_any(folder, candidates):
     for cand in candidates:
@@ -86,12 +104,14 @@ def find_image_any(folder, candidates):
                 pass
     return None
 
+
 def find_audio_any(folder, candidates):
     for cand in candidates:
         p = find_file_by_keywords(folder, cand, AUDIO_EXTS)
         if p and os.path.exists(p):
             return p
     return None
+
 
 # -------- utilities -------- #
 def safe_load_json(path, default):
@@ -101,9 +121,11 @@ def safe_load_json(path, default):
     except Exception:
         return default
 
+
 def save_json(path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
+
 
 def draw_text(surface, txt, size, x, y, color=(30,30,30), center=False):
     font = pygame.font.Font(None, size)
@@ -115,6 +137,7 @@ def draw_text(surface, txt, size, x, y, color=(30,30,30), center=False):
         rect.topleft = (x, y)
     surface.blit(img, rect)
 
+
 def load_any(path_noext: str) -> Optional[pygame.Surface]:
     for ext in (".png",".bmp",".jpg",".jpeg"):
         p = path_noext+ext
@@ -123,9 +146,11 @@ def load_any(path_noext: str) -> Optional[pygame.Surface]:
             return img.convert_alpha() if img.get_alpha() else img.convert()
     return None
 
+
 def best_score():
     scores = safe_load_json(SCORES_FILE, [])
     return max([r["score"] for r in scores], default=0)
+
 
 def add_score(name, score):
     scores = safe_load_json(SCORES_FILE, [])
@@ -134,6 +159,7 @@ def add_score(name, score):
     save_json(SCORES_FILE, scores[:10])
     return scores[:10]
 
+
 # -------- skins -------- #
 class SkinManager:
     """
@@ -141,8 +167,8 @@ class SkinManager:
       - frog.(png|bmp|jpg)
       - pad.(png|bmp|jpg)
       - bg.(png|bmp|jpg)
-      - (optional) music.(ogg|wav|mp3 on desktop)
-      - (optional) levels.json  -> per-level rules
+      - (optional) music.(wav|ogg|mp3 on desktop)
+      - (optional) levels.json
     Remembers last chosen skin + auto-cycle setting in Data/settings.json
     """
     def __init__(self, root=SKINS_ROOT, settings_file=SETTINGS_FILE):
@@ -188,7 +214,6 @@ class SkinManager:
                 ("heart",),
             ])
 
-            # strict names if present
             frog = frog or load_any(os.path.join(base, "frog"))
             pad  = pad  or load_any(os.path.join(base, "pad"))
             bg   = bg   or load_any(os.path.join(base, "bg"))
@@ -196,7 +221,6 @@ class SkinManager:
             if frog and pad and bg:
                 bg = pygame.transform.smoothscale(bg, (SCREEN_W, SCREEN_H))
 
-                # Flexible music discovery
                 music = find_audio_any(base, [
                     ("music",),
                     ("bgm",),
@@ -242,6 +266,7 @@ class SkinManager:
         s["auto_cycle"] = self.auto_cycle
         save_json(self.settings_file, s)
 
+
 # -------- sprites -------- #
 class Bat(pygame.sprite.Sprite):
     def __init__(self, image):
@@ -269,6 +294,7 @@ class Bat(pygame.sprite.Sprite):
             self.rect.x -= self.speed
         self.rect.x += wind_drift
         self.rect.x = max(0, min(self.rect.x, SCREEN_W - self.rect.width))
+
 
 class Ball(pygame.sprite.Sprite):
     def __init__(self, image, speed_range):
@@ -306,6 +332,7 @@ class Ball(pygame.sprite.Sprite):
 
     def fell_in_water(self):
         return self.rect.bottom > SCREEN_H - 10
+
 
 # -------- game -------- #
 class Game:
@@ -354,7 +381,7 @@ class Game:
                 self.life_img = pygame.Surface((24,24), pygame.SRCALPHA)
                 pygame.draw.circle(self.life_img, (0,180,0), (12,12), 10)
 
-        # audio is locked on web until first tap/keypress
+        # audio locked on web until first tap/keypress
         self.audio_locked = IS_WEB
         if not self.audio_locked:
             self.apply_music_for_skin(cur)
@@ -448,7 +475,7 @@ class Game:
             b.speed_range = speed_range
 
     def apply_music_for_skin(self, skin):
-        # After first user gesture (audio_locked == False), play on web & desktop.
+        # Only blocked while audio_locked; runs on web & desktop after first gesture.
         if getattr(self, "audio_locked", False):
             return
         try:
@@ -614,7 +641,6 @@ class Game:
                     if len(self.name_input) < 12 and e.unicode.isprintable():
                         self.name_input += e.unicode
             if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
-                # mobile convenience: tap to accept current name (or "Anon")
                 add_score(self.name_input, self.score)
                 self.name_input = ""
                 self.state = "LEADER"
@@ -636,7 +662,6 @@ class Game:
                 if e.key == pygame.K_s: self.state = "SKINS"
                 if e.key == pygame.K_m: self.toggle_mute()
             if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
-                # tap to play again
                 self.start_game()
 
         self.screen.blit(self.background, (0,0))
@@ -733,6 +758,7 @@ class Game:
             return
         self.audio_locked = False
         self.apply_music_for_skin(self.skinman.current())
+
 
 if __name__ == "__main__":
     Game().run()
