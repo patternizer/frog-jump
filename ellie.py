@@ -38,11 +38,12 @@ from typing import List, Dict, Optional
 IS_WEB = (sys.platform == "emscripten")
 
 pygame.init()
-# Mixer may fail on headless machines; we try once here, and again lazily in apply_music_for_skin.
 try:
-    pygame.mixer.init()
+    if not IS_WEB:
+        pygame.mixer.init()
 except Exception:
     pass
+
 
 SCREEN_W, SCREEN_H = 640, 480
 FPS = 60
@@ -232,7 +233,7 @@ class SkinManager:
                 if not music:
                     # Backwards-compat
                     for ext in AUDIO_EXTS:
-						candidate = os.path.join(base, "music"+ext)
+                        candidate = os.path.join(base, "music"+ext)
                         if os.path.exists(candidate):
                             music = candidate
                             break
@@ -532,8 +533,10 @@ class Game:
             b.speed_range = speed_range
 
     def apply_music_for_skin(self, skin):
-        """Start/loop the skin's background music (if present)."""
-        # Ensure mixer is ready
+        # On the web build, do nothing until we’ve seen a user gesture;
+        # you can even leave it disabled entirely by returning early.
+        if IS_WEB or getattr(self, "audio_locked", False):
+            return
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -541,39 +544,20 @@ class Game:
         except Exception:
             return
 
-        # Choose target track: skin music or global fallback
-        target = skin.get("music") if skin.get("music") else (
-            GLOBAL_MUSIC_FALLBACK if os.path.exists(GLOBAL_MUSIC_FALLBACK) else None
-        )
+        try:
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
 
-        if not target:
-            # No music available -> stop anything that might be playing
+        target = skin.get("music")
+        if target and os.path.exists(target):
             try:
-                pygame.mixer.music.stop()
+                pygame.mixer.music.load(target)
+                pygame.mixer.music.set_volume(0.5 if not getattr(self, "muted", False) else 0.0)
+                pygame.mixer.music.play(-1)
+                self.current_music_path = target
             except Exception:
                 pass
-            self.current_music_path = None
-            return
-
-        try:
-            # Only reload if we're switching tracks
-            if target != self.current_music_path:
-                try:
-                    pygame.mixer.music.stop()
-                except Exception:
-                    pass
-                pygame.mixer.music.load(target)
-                self.current_music_path = target
-
-            # Ensure it's playing (e.g., after a previous stop)
-            if not pygame.mixer.music.get_busy():
-                pygame.mixer.music.play(-1)
-
-            # Respect mute state
-            pygame.mixer.music.set_volume(0.0 if getattr(self, "muted", False) else 0.5)
-
-        except Exception as e:
-            print("Music load issue:", e)
 
     def start_game(self):
         self.score = 0
@@ -629,6 +613,8 @@ class Game:
         preview = pygame.transform.smoothscale(self.skinman.current()["frog"], (64,64))
         self.screen.blit(preview, (SCREEN_W//2-32, 310))
         draw_text(self.screen, f"Skin: {self.skinman.current()['name']}", 26, SCREEN_W//2, 390, center=True)
+        if self.audio_locked:
+            draw_text(self.screen, "Tap/press any key to enable sound", 22, SCREEN_W//2, SCREEN_H-40, (230,230,230), center=True)
 
     def handle_play(self):
         for e in pygame.event.get():
