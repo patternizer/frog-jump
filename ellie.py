@@ -35,6 +35,8 @@ Each rule can use synonyms:
 import pygame, sys, os, json, random, time, math
 from typing import List, Dict, Optional
 
+IS_WEB = (sys.platform == "emscripten")
+
 pygame.init()
 # Mixer may fail on headless machines; we try once here, and again lazily in apply_music_for_skin.
 try:
@@ -56,7 +58,6 @@ GLOBAL_MUSIC_FALLBACK = "music.mp3"
 LIFE_FILE  = "life.bmp"
 
 # ------- flexible asset discovery helpers ------- #
-IS_WEB = sys.platform == "emscripten"
 AUDIO_EXTS = (".ogg",) if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
 
@@ -390,8 +391,10 @@ class Game:
                 self.life_img = pygame.Surface((24,24), pygame.SRCALPHA)
                 pygame.draw.circle(self.life_img, (0,180,0), (12,12), 10)
 
-        self.apply_music_for_skin(cur)
-
+        self.audio_locked = IS_WEB  # web must wait for a user gesture
+        if not self.audio_locked:
+            self.apply_music_for_skin(cur)
+    
     def ensure_at_least_one_skin(self):
         if not self.skinman.skins:
             # Fallback visuals if assets missing
@@ -577,7 +580,8 @@ class Game:
         self.lives = 5
         self.balls.empty()
         cur = self.skinman.current()
-        self.apply_music_for_skin(cur)
+        if not self.audio_locked:
+            self.apply_music_for_skin(cur)    
         self.background = cur["bg"]
         self.bat.set_image(cur["pad"])
         self.frog_img = cur["frog"]
@@ -605,6 +609,8 @@ class Game:
     def handle_title(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
+            if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                self.unlock_audio_and_play()
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_SPACE: self.start_game()
                 if e.key == pygame.K_s: self.state = "SKINS"
@@ -627,6 +633,8 @@ class Game:
     def handle_play(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
+            if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                self.unlock_audio_and_play()            
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_p:
                     self.last_frame = self.screen.copy()   # freeze frame
@@ -742,6 +750,8 @@ class Game:
     def handle_skins(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
+            if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                self.unlock_audio_and_play()            
             if e.type == pygame.KEYDOWN:
                 if e.key in (pygame.K_LEFT, pygame.K_a): self.skinman.prev()
                 if e.key in (pygame.K_RIGHT, pygame.K_d): self.skinman.next()
@@ -752,7 +762,8 @@ class Game:
                     self.bat.set_image(cur["pad"])
                     self.frog_img = cur["frog"]
                     self.life_img = cur.get("life_icon", self.life_img)
-                    self.apply_music_for_skin(cur)
+                    if not self.audio_locked:
+                        self.apply_music_for_skin(cur)
                 if e.key == pygame.K_c:
                     self.skinman.auto_cycle = not self.skinman.auto_cycle
                     self.skinman.save_choice()
@@ -790,6 +801,16 @@ class Game:
 
     def quit(self):
         pygame.quit(); sys.exit()
+        
+    def unlock_audio_and_play(self):
+        """Enable audio after a user gesture and start the current skin’s music."""
+        if not getattr(self, "audio_locked", False):
+            return
+        self.audio_locked = False
+        try:
+            self.apply_music_for_skin(self.skinman.current())
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     Game().run()
