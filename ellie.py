@@ -7,43 +7,28 @@ assets/skins/
   autumn/
     bg.png
     levels.json
-    music.mp3             (any audio name containing 'music' also works)
-    lily pad.bmp          (or pad.png, platform.png, lilypad.png, etc.)
-    frog_bigeye.bmp       (or frog.png, ball.png)
-    frog_wave.bmp         (optional life icon)
+    music.ogg            (or music.wav for older iOS)
+    lily pad.png         (or pad.png, platform.png, lilypad.png, etc.)
+    frog_bigeye.png      (or frog.png, ball.png)
+    frog_wave.png        (optional life icon)
   spring/
   winter/
   night/
-
-This script is forgiving about filenames:
-- background: names containing "bg" or "background"
-- pad: names containing "lily"+"pad", "lilypad", "pad", or "platform"
-- frog/ball: names containing "frog_bigeye", "frog", "ball", "character", "player"
-- life icon (optional): names containing "frog"+"wave", "life", "heart"
-- music: any audio file whose name contains "music" or "bgm"
-
-levels.json accepted formats:
-- {"levels": [ {...}, {...} ]}  (recommended)
-- {"rules":  [ {...}, {...} ]}
-- [ {...}, {...} ]
-
-Each rule can use synonyms:
-  score|threshold, frogs|num_frogs, speed|speed_range, currents|current,
-  wind|wind_gust, pad_scale|pad_size|pad_factor
 """
 
 import pygame, sys, os, json, random, time, math
 from typing import List, Dict, Optional
 
+# --- runtime flags ---
 IS_WEB = (sys.platform == "emscripten")
 
 pygame.init()
+# On the web, let the first user gesture unlock & init sound.
 try:
     if not IS_WEB:
         pygame.mixer.init()
 except Exception:
     pass
-
 
 SCREEN_W, SCREEN_H = 640, 480
 FPS = 60
@@ -55,13 +40,12 @@ SKINS_ROOT    = os.path.join("assets", "skins")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GLOBAL_MUSIC_FALLBACK = "music.mp3"
-LIFE_FILE  = "life.bmp"
+LIFE_FILE  = "life.bmp"  # optional global life icon
 
 # ------- flexible asset discovery helpers ------- #
-AUDIO_EXTS = (".ogg",) if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
+# Prefer OGG on web but allow WAV fallback (iPhone Safari).
+AUDIO_EXTS = (".ogg", ".wav") if IS_WEB else (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 IMAGE_EXTS = (".png", ".bmp", ".jpg", ".jpeg")
-
 
 def list_files(folder):
     try:
@@ -74,29 +58,24 @@ def stem_lower(name: str):
 
 def find_file_by_keywords(folder, keywords, allowed_exts):
     """
-    Look in `folder` and return the first file whose stem contains *all* keywords (case-insensitive).
-    `keywords` may be a string or list/tuple of strings.
+    Return the first file whose stem contains *all* keywords (case-insensitive).
     """
     if isinstance(keywords, str):
         kw = [keywords]
     else:
         kw = list(keywords)
     files = list_files(folder)
-    # Sort for deterministic choice
     for fname in sorted(files):
         low = fname.lower()
         if not low.endswith(allowed_exts):
             continue
         stem = stem_lower(fname)
         stem_nospace = stem.replace(" ", "").replace("_", "")
-        # match if every keyword appears in either raw stem or nospace version
         if all((k.lower() in stem) or (k.lower().replace(" ", "") in stem_nospace) for k in kw):
             return os.path.join(folder, fname)
     return None
 
 def find_image_any(folder, candidates):
-    """Try many candidate keyword combos to locate an image in folder."""
-    # candidates is a list of tuples/list (each is one set of required keywords)
     for cand in candidates:
         p = find_file_by_keywords(folder, cand, IMAGE_EXTS)
         if p and os.path.exists(p):
@@ -113,7 +92,6 @@ def find_audio_any(folder, candidates):
         if p and os.path.exists(p):
             return p
     return None
-
 
 # -------- utilities -------- #
 def safe_load_json(path, default):
@@ -163,7 +141,7 @@ class SkinManager:
       - frog.(png|bmp|jpg)
       - pad.(png|bmp|jpg)
       - bg.(png|bmp|jpg)
-      - (optional) music.(mp3|ogg|wav)
+      - (optional) music.(ogg|wav|mp3 on desktop)
       - (optional) levels.json  -> per-level rules
     Remembers last chosen skin + auto-cycle setting in Data/settings.json
     """
@@ -186,8 +164,6 @@ class SkinManager:
         names = sorted([d for d in os.listdir(self.root) if os.path.isdir(os.path.join(self.root, d))])
         for name in names:
             base = os.path.join(self.root, name)
-            # Try to discover required art with flexible names:
-            # frog image (ball/character)
             frog = find_image_any(base, [
                 ("frog_bigeye",),
                 ("frog", "bigeye"),
@@ -196,27 +172,23 @@ class SkinManager:
                 ("character",),
                 ("player",),
             ])
-            # pad image (lily pad / platform)
             pad  = find_image_any(base, [
                 ("lily", "pad"),
                 ("lilypad",),
                 ("pad",),
                 ("platform",),
             ])
-            # background image
             bg   = find_image_any(base, [
                 ("bg",),
                 ("background",),
             ])
-
-            # optional per-skin life icon (frog_wave)
             life_icon = find_image_any(base, [
                 ("frog", "wave"),
                 ("life",),
                 ("heart",),
             ])
 
-            # If strict names exist, prefer them
+            # strict names if present
             frog = frog or load_any(os.path.join(base, "frog"))
             pad  = pad  or load_any(os.path.join(base, "pad"))
             bg   = bg   or load_any(os.path.join(base, "bg"))
@@ -224,21 +196,19 @@ class SkinManager:
             if frog and pad and bg:
                 bg = pygame.transform.smoothscale(bg, (SCREEN_W, SCREEN_H))
 
-                # Flexible music discovery: handle odd filenames like "music. mp3"
+                # Flexible music discovery
                 music = find_audio_any(base, [
                     ("music",),
                     ("bgm",),
                     ("background", "music"),
                 ])
                 if not music:
-                    # Backwards-compat
                     for ext in AUDIO_EXTS:
                         candidate = os.path.join(base, "music"+ext)
                         if os.path.exists(candidate):
                             music = candidate
                             break
 
-                # Load levels.json if present
                 levels_path = os.path.join(base, "levels.json")
                 levels = safe_load_json(levels_path, None) if os.path.exists(levels_path) else None
                 self.skins.append({
@@ -297,7 +267,6 @@ class Bat(pygame.sprite.Sprite):
             self.rect.x += self.speed
         if pressed[pygame.K_LEFT] or pressed[pygame.K_a]:
             self.rect.x -= self.speed
-        # wind softly pushes the pad (simulate gusts)
         self.rect.x += wind_drift
         self.rect.x = max(0, min(self.rect.x, SCREEN_W - self.rect.width))
 
@@ -323,21 +292,14 @@ class Ball(pygame.sprite.Sprite):
         self.vy = random.randint(lo, hi)
 
     def update(self, bat_rect, current_force_x=0.0):
-        # apply current (horizontal acceleration)
         self.vx += current_force_x
-        # clamp VX slightly to avoid runaway
         self.vx = max(-12, min(12, self.vx))
-
         self.rect.x += self.vx
         self.rect.y += self.vy
-
-        # walls
         if self.rect.left <= 0 or self.rect.right >= SCREEN_W:
             self.vx *= -1
         if self.rect.top <= 0:
             self.vy = abs(self.vy)
-
-        # bat collision (AABB + downward check)
         if self.rect.colliderect(bat_rect) and self.vy > 0:
             lo, hi = self.speed_range
             self.vy = -random.randint(max(lo,3), hi+1)
@@ -363,9 +325,9 @@ class Game:
         self.muted = False
 
         # world forces / visuals from rules
-        self.current_force_x = 0.0   # "currents" pushing frogs
-        self.wind_base = 0.0         # constant wind on pad
-        self.wind_amp  = 0.0         # amplitude for gusty sin modulation
+        self.current_force_x = 0.0
+        self.wind_base = 0.0
+        self.wind_amp  = 0.0
         self.pad_scale = 1.0
 
         self.level_idx = 0
@@ -377,11 +339,11 @@ class Game:
         self.background = cur["bg"]
         self.bat = Bat(cur["pad"])
         self.frog_img = cur["frog"]
-        # life icon: prefer per-skin, else LIFE_FILE, else generate
+
+        # life icon: per-skin, else LIFE_FILE, else generate
         self.life_img = cur.get("life_icon")
         if self.life_img is None:
             try:
-                # prefer a global frog_wave.bmp if present
                 if os.path.exists("frog_wave.bmp"):
                     self.life_img = pygame.image.load("frog_wave.bmp").convert_alpha()
                 elif os.path.exists(LIFE_FILE):
@@ -392,30 +354,21 @@ class Game:
                 self.life_img = pygame.Surface((24,24), pygame.SRCALPHA)
                 pygame.draw.circle(self.life_img, (0,180,0), (12,12), 10)
 
-        self.audio_locked = IS_WEB  # web must wait for a user gesture
+        # audio is locked on web until first tap/keypress
+        self.audio_locked = IS_WEB
         if not self.audio_locked:
             self.apply_music_for_skin(cur)
-    
+
     def ensure_at_least_one_skin(self):
         if not self.skinman.skins:
-            # Fallback visuals if assets missing
             fb_bg = pygame.Surface((SCREEN_W, SCREEN_H)); fb_bg.fill((140,180,220))
             fb_frog = pygame.Surface((40,40), pygame.SRCALPHA); pygame.draw.circle(fb_frog, (0,200,0), (20,20), 18)
             fb_pad  = pygame.Surface((120,24), pygame.SRCALPHA); pygame.draw.ellipse(fb_pad, (40,140,60), fb_pad.get_rect())
-            self.skinman.skins = [{"name":"fallback","frog":fb_frog,"pad":fb_pad,"bg":fb_bg,"music":None,"levels":None, "life_icon":None}]
+            self.skinman.skins = [{"name":"fallback","frog":fb_frog,"pad":fb_pad,"bg":fb_bg,"music":None,"levels":None,"life_icon":None}]
             self.skinman.index = 0
 
     # ----- rules / levels ----- #
     def rules_from_skin(self, skin) -> List[Dict]:
-        """
-        Returns a list of level-rule dicts. Accepts several formats, e.g.:
-        - {"levels":[ {...}, {...} ]}
-        - {"rules":[ {...}, {...} ]}
-        - [ {...}, {...} ]
-        Where each level dict may use synonyms:
-          score|threshold, frogs|num_frogs, speed|speed_range, currents|current,
-          wind|wind_gust, pad_scale|pad_size|pad_factor
-        """
         default = [
             {"score":0,    "frogs":1, "speed":[3,6],  "currents":0.0,  "wind":0.0,  "pad_scale":1.00},
             {"score":1500, "frogs":2, "speed":[3,7],  "currents":0.05, "wind":0.00, "pad_scale":0.95},
@@ -423,87 +376,53 @@ class Game:
             {"score":5000, "frogs":4, "speed":[5,9],  "currents":0.12, "wind":0.04, "pad_scale":0.88},
             {"score":7500, "frogs":5, "speed":[6,10], "currents":0.15, "wind":0.05, "pad_scale":0.84},
         ]
-
         raw = skin.get("levels")
-
-        # Allow list directly
         if isinstance(raw, list) and raw:
             levels_raw = raw
         elif isinstance(raw, dict):
-            # Try common keys
             for key in ("levels", "rules", "stages"):
                 if isinstance(raw.get(key), list) and raw.get(key):
-                    levels_raw = raw.get(key)
-                    break
+                    levels_raw = raw.get(key); break
             else:
                 levels_raw = []
         else:
             levels_raw = []
-
         if not levels_raw:
             return default
 
-        def norm_level(d):
-            # Normalize synonyms
+        def norm(d):
             score = d.get("score", d.get("threshold", 0))
             frogs = d.get("frogs", d.get("num_frogs", 1))
             speed = d.get("speed", d.get("speed_range", [3,6]))
             currents = d.get("currents", d.get("current", 0.0))
             wind = d.get("wind", d.get("wind_gust", 0.0))
             pad_scale = d.get("pad_scale", d.get("pad_size", d.get("pad_factor", 1.0)))
-
-            # Clamp/cast types
-            try:
-                frogs = int(frogs)
-            except Exception:
-                frogs = 1
-
-            # speed can be [lo,hi] or a single number
+            try: frogs = int(frogs)
+            except: frogs = 1
             if isinstance(speed, (list, tuple)) and len(speed) >= 2:
                 lo, hi = speed[0], speed[1]
             else:
-                try:
-                    lo = int(speed)
-                except Exception:
-                    lo = 3
+                try: lo = int(speed)
+                except: lo = 3
                 hi = max(lo+2, lo+3)
             lo = max(1, int(lo)); hi = max(lo+1, int(hi))
-
             try: currents = float(currents)
-            except Exception: currents = 0.0
+            except: currents = 0.0
             try: wind = float(wind)
-            except Exception: wind = 0.0
+            except: wind = 0.0
             try: pad_scale = float(pad_scale)
-            except Exception: pad_scale = 1.0
+            except: pad_scale = 1.0
+            try: score_i = int(float(score))
+            except: score_i = 0
+            return {"score":score_i,"frogs":frogs,"speed":[lo,hi],"currents":currents,"wind":wind,"pad_scale":pad_scale}
 
-            # score to int, tolerant of strings
-            try:
-                score_i = int(float(score))
-            except Exception:
-                score_i = 0
-
-            return {
-                "score": score_i,
-                "frogs": frogs,
-                "speed": [lo, hi],
-                "currents": currents,
-                "wind": wind,
-                "pad_scale": pad_scale
-            }
-
-        levels = [norm_level(d) for d in levels_raw if isinstance(d, dict)]
+        levels = [norm(d) for d in levels_raw if isinstance(d, dict)]
         if not levels:
             return default
-
-        # sort by score ascending to be safe
         levels.sort(key=lambda x: x.get("score", 0))
         return levels
 
     def level_for_score(self, rules: List[Dict], score: int):
-        """
-        Given a list of rules sorted by score threshold, return:
-        (level_index, frogs, speed_range, currents, wind, pad_scale)
-        """
         if not rules:
             return 0, 1, (3,6), 0.0, 0.0, 1.0
         idx, cfg = 0, rules[0]
@@ -520,22 +439,17 @@ class Game:
         return idx, frogs, speed, currents, wind, pad_scale
 
     def apply_rules(self, speed_range, currents, wind, pad_scale):
-        # store world forces
         self.current_force_x = currents
-        # make wind a smooth gust: base + small sinusoidal wobble
         self.wind_base = wind
         self.wind_amp = wind * 0.5
-        # apply pad scaling
         self.pad_scale = pad_scale
         self.bat.set_scale(self.pad_scale)
-        # propagate new speed range to balls
         for b in self.balls:
             b.speed_range = speed_range
 
     def apply_music_for_skin(self, skin):
-        # On the web build, do nothing until we’ve seen a user gesture;
-        # you can even leave it disabled entirely by returning early.
-        if IS_WEB or getattr(self, "audio_locked", False):
+        # After first user gesture (audio_locked == False), play on web & desktop.
+        if getattr(self, "audio_locked", False):
             return
         try:
             if not pygame.mixer.get_init():
@@ -543,12 +457,10 @@ class Game:
                 pygame.mixer.init()
         except Exception:
             return
-
         try:
             pygame.mixer.music.stop()
         except Exception:
             pass
-
         target = skin.get("music")
         if target and os.path.exists(target):
             try:
@@ -565,11 +477,10 @@ class Game:
         self.balls.empty()
         cur = self.skinman.current()
         if not self.audio_locked:
-            self.apply_music_for_skin(cur)    
+            self.apply_music_for_skin(cur)
         self.background = cur["bg"]
         self.bat.set_image(cur["pad"])
         self.frog_img = cur["frog"]
-        # refresh life icon from skin (if available)
         self.life_img = cur.get("life_icon", self.life_img)
         rules = self.rules_from_skin(cur)
         self.level_idx, frogs, spd, currents, wind, pad_scale = self.level_for_score(rules, self.score)
@@ -599,6 +510,9 @@ class Game:
                 if e.key == pygame.K_SPACE: self.start_game()
                 if e.key == pygame.K_s: self.state = "SKINS"
                 if e.key == pygame.K_m: self.toggle_mute()
+            if e.type == pygame.MOUSEBUTTONDOWN:
+                # tap-to-start for mobile
+                self.start_game()
         self.draw_title()
         pygame.display.flip()
         self.clock.tick(FPS)
@@ -614,48 +528,44 @@ class Game:
         self.screen.blit(preview, (SCREEN_W//2-32, 310))
         draw_text(self.screen, f"Skin: {self.skinman.current()['name']}", 26, SCREEN_W//2, 390, center=True)
         if self.audio_locked:
-            draw_text(self.screen, "Tap/press any key to enable sound", 22, SCREEN_W//2, SCREEN_H-40, (230,230,230), center=True)
+            draw_text(self.screen, "Tap/press any key to enable sound", 20, SCREEN_W//2, SCREEN_H-36, (20,20,20), center=True)
 
     def handle_play(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
             if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
-                self.unlock_audio_and_play()            
+                self.unlock_audio_and_play()
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_p:
-                    self.last_frame = self.screen.copy()   # freeze frame
+                    self.last_frame = self.screen.copy()
                     self.state = "PAUSED"
                 if e.key == pygame.K_m: self.toggle_mute()
 
         pressed = pygame.key.get_pressed()
-        # wind drift is base + a soft sinusoidal gust
         t = pygame.time.get_ticks() / 1000.0
         wind_now = self.wind_base + self.wind_amp * math.sin(t * 1.2)
         self.bat.update(pressed, wind_drift=wind_now)
 
-        # level check based on current skin rules
         cur_skin = self.skinman.current()
         rules = self.rules_from_skin(cur_skin)
         new_level_idx, frogs, spd, currents, wind, pad_scale = self.level_for_score(rules, self.score)
         if new_level_idx != self.level_idx:
             self.level_idx = new_level_idx
-            # optional: auto-cycle skin on level-up
             if self.skinman.auto_cycle:
                 self.skinman.next()
                 self.skinman.save_choice()
                 cur_skin = self.skinman.current()
-                self.apply_music_for_skin(cur_skin)
+                self.apply_music_for_skin(cur_skin)  # harmless if audio still locked
                 self.background = cur_skin["bg"]
                 self.bat.set_image(cur_skin["pad"])
                 self.frog_img = cur_skin["frog"]
             self.apply_rules(spd, currents, wind, pad_scale)
-        # ensure balls count & sprites use current frog image
+
         while len(self.balls) < frogs:
             self.balls.add(Ball(self.frog_img, spd))
         for b in self.balls:
             b.set_image(self.frog_img)
 
-        # update balls & check
         for b in self.balls:
             b.update(self.bat.rect, current_force_x=self.current_force_x)
         if any(b.fell_in_water() for b in self.balls):
@@ -666,7 +576,6 @@ class Game:
         else:
             self.score += 1
 
-        # draw
         self.screen.blit(self.background, (0,0))
         self.balls.draw(self.screen)
         self.screen.blit(self.bat.image, self.bat.rect)
@@ -680,7 +589,6 @@ class Game:
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_p: self.state = "PLAYING"
                 if e.key == pygame.K_m: self.toggle_mute()
-        # frozen frame + translucent overlay
         if self.last_frame: self.screen.blit(self.last_frame, (0,0))
         overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         overlay.fill((0,0,0,120))
@@ -705,6 +613,12 @@ class Game:
                 else:
                     if len(self.name_input) < 12 and e.unicode.isprintable():
                         self.name_input += e.unicode
+            if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
+                # mobile convenience: tap to accept current name (or "Anon")
+                add_score(self.name_input, self.score)
+                self.name_input = ""
+                self.state = "LEADER"
+
         self.screen.blit(self.background, (0,0))
         draw_text(self.screen, "Game Over!", 64, SCREEN_W//2, 120, center=True)
         draw_text(self.screen, f"Score: {self.score}", 36, SCREEN_W//2, 180, center=True)
@@ -721,6 +635,9 @@ class Game:
                 if e.key == pygame.K_ESCAPE: return self.quit()
                 if e.key == pygame.K_s: self.state = "SKINS"
                 if e.key == pygame.K_m: self.toggle_mute()
+            if e.type == pygame.MOUSEBUTTONDOWN and IS_WEB:
+                # tap to play again
+                self.start_game()
 
         self.screen.blit(self.background, (0,0))
         draw_text(self.screen, "Top Scores", 56, SCREEN_W//2, 90, center=True)
@@ -737,7 +654,8 @@ class Game:
         for e in pygame.event.get():
             if e.type == pygame.QUIT: return self.quit()
             if e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
-                self.unlock_audio_and_play()            
+                self.unlock_audio_and_play()
+
             if e.type == pygame.KEYDOWN:
                 if e.key in (pygame.K_LEFT, pygame.K_a): self.skinman.prev()
                 if e.key in (pygame.K_RIGHT, pygame.K_d): self.skinman.next()
@@ -750,10 +668,29 @@ class Game:
                     self.life_img = cur.get("life_icon", self.life_img)
                     if not self.audio_locked:
                         self.apply_music_for_skin(cur)
+                    self.state = "TITLE"
                 if e.key == pygame.K_c:
                     self.skinman.auto_cycle = not self.skinman.auto_cycle
                     self.skinman.save_choice()
                 if e.key == pygame.K_ESCAPE:
+                    self.state = "TITLE"
+
+            if e.type == pygame.MOUSEBUTTONDOWN:
+                x, _y = e.pos
+                w = SCREEN_W
+                if x < w/3:
+                    self.skinman.prev()
+                elif x > 2*w/3:
+                    self.skinman.next()
+                else:
+                    self.skinman.save_choice()
+                    cur = self.skinman.current()
+                    self.background = cur["bg"]
+                    self.bat.set_image(cur["pad"])
+                    self.frog_img = cur["frog"]
+                    self.life_img = cur.get("life_icon", self.life_img)
+                    if not self.audio_locked:
+                        self.apply_music_for_skin(cur)
                     self.state = "TITLE"
 
         cur = self.skinman.current()
@@ -764,10 +701,12 @@ class Game:
         pad  = pygame.transform.smoothscale(cur["pad"], (200,40))
         self.screen.blit(frog, (SCREEN_W//2-45, 190))
         self.screen.blit(pad,  (SCREEN_W//2-100, 290))
-        music_label = "has music" if cur.get("music") else "uses global music"
+        music_label = "has music" if cur.get("music") else "no music file"
         draw_text(self.screen, f"←/→ browse, Enter select, C toggle auto-cycle ({'ON' if self.skinman.auto_cycle else 'OFF'})", 22, SCREEN_W//2, 360, center=True)
         draw_text(self.screen, f"Music: {music_label}", 22, SCREEN_W//2, 388, center=True)
         draw_text(self.screen, "Esc to return", 22, SCREEN_W//2, 414, center=True)
+        if IS_WEB:
+            draw_text(self.screen, "Tap left/right thirds to browse • Tap center to select", 20, SCREEN_W//2, 440, (10,10,10), center=True)
         pygame.display.flip()
         self.clock.tick(30)
 
@@ -787,16 +726,14 @@ class Game:
 
     def quit(self):
         pygame.quit(); sys.exit()
-        
+
     def unlock_audio_and_play(self):
         """Enable audio after a user gesture and start the current skin’s music."""
         if not getattr(self, "audio_locked", False):
             return
         self.audio_locked = False
-        try:
-            self.apply_music_for_skin(self.skinman.current())
-        except Exception:
-            pass
+        self.apply_music_for_skin(self.skinman.current())
 
 if __name__ == "__main__":
     Game().run()
+
